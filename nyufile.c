@@ -6,6 +6,7 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <math.h>
 #define handle_error(msg) do { perror(msg); exit(EXIT_FAILURE); } while (0)
 
 #pragma pack(push,1)
@@ -61,7 +62,7 @@ void process_name(char* raw, char* new){
     char* p = new;
     *p = 0;
     if(raw[0]==0) return;
-    if(raw[0]==0xe5)return;
+    // if(raw[0]==0xe5)return;
     for(int i=0;i<8;i++){
         if(raw[i]==0x20)break;
         else *p++ = raw[i];
@@ -84,7 +85,8 @@ int main(int argc, char **argv){
     int opt;
     char* error_message = "Usage: ./nyufile disk <options>\n  -i                     Print the file system information.\n  -l                     List the root directory.\n  -r filename [-s sha1]  Recover a contiguous file.\n  -R filename -s sha1    Recover a possibly non-contiguous file.\n";
     int i=0, l=0, r=0, rr=0, s=0;
-    char *file_name;
+    char* disk_name;
+    char* recover_file;
     while((opt = getopt(argc, argv, "ilr:R:s:")) != -1){
         switch(opt){
         case 'i':
@@ -93,23 +95,40 @@ int main(int argc, char **argv){
         case 'l':
             l=1;
             break;
+        case 'r':
+            r=1;
+            strcpy(recover_file, optarg);
+            break;
+        case 's':
+            s=1;
+            //
+            break;
+        case 'R':
+            rr=1;
+            strcpy(recover_file, optarg);
+            break;
         default:
             fprintf(stderr, error_message);
             exit(EXIT_FAILURE);     
         }
     }
-    if (optind >= argc) {
+    if (optind >= argc || optind < argc-1) {
         fprintf(stderr, error_message);
         exit(EXIT_FAILURE);
     }
-    file_name = argv[optind];
+    disk_name = argv[optind];
+
+    if(i==1)if(l||r||s||rr){fprintf(stderr, error_message);exit(EXIT_FAILURE);}
+    if(l==1)if(i||r||s||rr){fprintf(stderr, error_message);exit(EXIT_FAILURE);}
+    if(r==1&&rr==1){fprintf(stderr, error_message);exit(EXIT_FAILURE);}
+    if(rr==1 && s==0){fprintf(stderr, error_message);exit(EXIT_FAILURE);}
     
     int fd;
     struct stat sb;
     char *addr;
     off_t offset, pa_offset;
     size_t length_file;
-    fd = open(file_name, O_RDONLY);
+    fd = open(disk_name, O_RDONLY);
     if (fd == -1)
         handle_error("open");
     if (fstat(fd, &sb) == -1) // To obtain file size 
@@ -119,6 +138,7 @@ int main(int argc, char **argv){
     addr = mmap(NULL, length_file - pa_offset, PROT_READ, MAP_PRIVATE, fd, pa_offset);
     if (addr == MAP_FAILED)
             handle_error("mmap");
+    close(fd);
     BootEntry *disk = (BootEntry*)malloc(sizeof(BootEntry));
     memcpy(disk, addr, sizeof(BootEntry));
     int NumFATs = disk->BPB_NumFATs;
@@ -141,15 +161,14 @@ int main(int argc, char **argv){
         DirEntry *entry = (DirEntry*)malloc(sizeof(DirEntry));
         int offset_a;
         char* file_name = (char*)malloc(13*sizeof(char));
-        int temp_root_dir;
         int root_fat = (RootClus - 2) * SecPerClus + 2;
+        int root_dir = cluster_start + (root_fat-2)*BytsPerSec;;
         int starting_cluster;
         do{
-            temp_root_dir = cluster_start + (root_fat-2)*BytsPerSec;
             for(offset_a=0;offset_a<BytsPerSec;offset_a+=sizeof(DirEntry)){
-                memcpy(entry, addr+temp_root_dir+offset_a, sizeof(DirEntry));
+                memcpy(entry, addr+root_dir+offset_a, sizeof(DirEntry));
                 process_name(entry->DIR_Name, file_name);
-                if(file_name[0]==0)continue;
+                if(file_name[0]==0 || file_name[0]==0xe5)continue;
                 else{
                     total_entry++;
                     if((entry->DIR_Attr & 0x10) == 0)
@@ -161,10 +180,66 @@ int main(int argc, char **argv){
                     printf("starting cluster = %d)\n", starting_cluster);
                 }
             }
-
             memcpy(&root_fat, addr + fat_start + root_fat * 4, 4);
         }while(root_fat < 0x0ffffff8);
         printf("Total number of entries = %d\n", total_entry);
+        return 0;
+    }
+    if(r==1 && s==0){
+        char* new_file = (char*)malloc(length_file);
+        memcpy(new_file, addr, length_file);
+
+        DirEntry *entry = (DirEntry*)malloc(sizeof(DirEntry));
+        int offset_a;
+        char* file_name = (char*)malloc(13*sizeof(char));
+        int root_fat = (RootClus - 2) * SecPerClus + 2;
+        int root_dir = cluster_start + (root_fat-2)*BytsPerSec;;
+        int match = 0;
+        int i,j;
+        do{
+            for(offset_a=0;offset_a<BytsPerSec;offset_a+=sizeof(DirEntry)){
+                memcpy(entry, addr+root_dir+offset_a, sizeof(DirEntry));
+                process_name(entry->DIR_Name, file_name);
+                if(entry->DIR_Name[0]==0xe5 && strcmp(recover_file+1, file_name+1)==0){
+                    if(match==1){
+                        fprintf(stderr, "%s: multiple candidates found\n", recover_file);
+                        exit(EXIT_FAILURE);
+                    }
+                    match++;
+                    int file_size;
+                    int starting_cluster;
+                    int cluster_spread;
+                    
+                    file_size = entry->DIR_FileSize;
+                    starting_cluster = entry->DIR_FstClusLO;
+                    starting_cluster += (entry->DIR_FstClusHI)*0x10000;
+                    i=starting_cluster;
+                    j=starting_cluster+1;
+                    for(;file_size>0;file_size-=(BytsPerSec*SecPerClus)){
+                        if(file_size<=(BytsPerSec*SecPerClus))j=0x0fffffff;
+                        memcpy(new_file + fat_start + i * 4, &j, 4); // change first FAT
+                        i++;j++;    
+                    }
+                    memcpy(new_file+root_dir+offset_a, recover_file, 1);  // change e5
+                }
+                else continue;
+            }
+            memcpy(&root_fat, addr + fat_start + root_fat * 4, 4);
+        }while(root_fat < 0x0ffffff8);
+        if(match==0){
+            fprintf(stderr, "%s: file not found\n", recover_file);
+            exit(EXIT_FAILURE);
+        }
+        //copy FAT
+        for(i=1;i<NumFATs;i++){
+            memcpy(new_file + fat_start + i*FATSz32*BytsPerSec, new_file + fat_start, FATSz32*BytsPerSec);
+        }
+        //write new_file back
+        FILE *fp;
+        fp = fopen(disk_name, "wb");
+        fwrite(new_file, length_file , 1, fp);
+        fclose(fp);
+        printf("%s: successfully recovered\n", recover_file);
         return 0;
     }
 
