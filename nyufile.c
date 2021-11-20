@@ -7,6 +7,9 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <math.h>
+#include <openssl/sha.h>
+
+#define SHA_DIGEST_LENGTH 20
 #define handle_error(msg) do { perror(msg); exit(EXIT_FAILURE); } while (0)
 
 #pragma pack(push,1)
@@ -60,7 +63,8 @@ typedef struct BootEntry {
 
 void process_name(char* raw, char* new){
     char* p = new;
-    *p = 0;
+    while(p<new+13)*p++=0;
+    p = new;
     if(raw[0]==0) return;
     // if(raw[0]==0xe5)return;
     for(int i=0;i<8;i++){
@@ -75,9 +79,9 @@ void process_name(char* raw, char* new){
     }
     if((*p)==0x2e) *p=0;
     *++p=0;
+    while(p<new+13)*p++=0;
     return;
 }
-
 
 int main(int argc, char **argv){
     extern char *optarg;
@@ -87,6 +91,7 @@ int main(int argc, char **argv){
     int i=0, l=0, r=0, rr=0, s=0;
     char* disk_name;
     char* recover_file;
+    char* sha_target = (char*)malloc(41);
     while((opt = getopt(argc, argv, "ilr:R:s:")) != -1){
         switch(opt){
         case 'i':
@@ -97,24 +102,27 @@ int main(int argc, char **argv){
             break;
         case 'r':
             r=1;
+            recover_file = (char*)malloc(strlen(optarg)+1);
             strcpy(recover_file, optarg);
             break;
         case 's':
             s=1;
-            //
+            if(strlen(optarg)==40)strcpy(sha_target, optarg);
+            else{
+                fprintf(stderr, error_message);exit(EXIT_FAILURE); 
+            }
             break;
         case 'R':
             rr=1;
+            recover_file = (char*)malloc(strlen(optarg)+1);
             strcpy(recover_file, optarg);
             break;
         default:
-            fprintf(stderr, error_message);
-            exit(EXIT_FAILURE);     
+            fprintf(stderr, error_message);exit(EXIT_FAILURE);     
         }
     }
     if (optind >= argc || optind < argc-1) {
-        fprintf(stderr, error_message);
-        exit(EXIT_FAILURE);
+        fprintf(stderr, error_message);exit(EXIT_FAILURE);
     }
     disk_name = argv[optind];
 
@@ -122,6 +130,8 @@ int main(int argc, char **argv){
     if(l==1)if(i||r||s||rr){fprintf(stderr, error_message);exit(EXIT_FAILURE);}
     if(r==1&&rr==1){fprintf(stderr, error_message);exit(EXIT_FAILURE);}
     if(rr==1 && s==0){fprintf(stderr, error_message);exit(EXIT_FAILURE);}
+    if(s==1 && r==0 && rr==0){fprintf(stderr, error_message);exit(EXIT_FAILURE);}
+    if(i==0 && l==0 && s==0 && r==0 && rr==0){fprintf(stderr, error_message);exit(EXIT_FAILURE);}
     
     int fd;
     struct stat sb;
@@ -162,18 +172,18 @@ int main(int argc, char **argv){
         int offset_a;
         char* file_name = (char*)malloc(13*sizeof(char));
         int root_fat = (RootClus - 2) * SecPerClus + 2;
-        int root_dir = cluster_start + (root_fat-2)*BytsPerSec;;
+        int root_dir = cluster_start + (root_fat-2)*BytsPerSec;
         int starting_cluster;
         do{
             for(offset_a=0;offset_a<BytsPerSec;offset_a+=sizeof(DirEntry)){
                 memcpy(entry, addr+root_dir+offset_a, sizeof(DirEntry));
                 process_name(entry->DIR_Name, file_name);
-                if(file_name[0]==0 || file_name[0]==0xe5)continue;
+                if(file_name[0]==0 || entry->DIR_Name[0]==0xe5)continue;
                 else{
                     total_entry++;
                     if((entry->DIR_Attr & 0x10) == 0)
-                        printf("%s (size= ", file_name);
-                    else printf("%s/ (size= ", file_name);
+                        printf("%s (size = ", file_name);
+                    else printf("%s/ (size = ", file_name);
                     printf("%d, ", entry->DIR_FileSize);
                     starting_cluster = entry->DIR_FstClusLO;
                     starting_cluster += entry->DIR_FstClusHI*0x10000;
@@ -188,12 +198,11 @@ int main(int argc, char **argv){
     if(r==1 && s==0){
         char* new_file = (char*)malloc(length_file);
         memcpy(new_file, addr, length_file);
-
         DirEntry *entry = (DirEntry*)malloc(sizeof(DirEntry));
         int offset_a;
         char* file_name = (char*)malloc(13*sizeof(char));
         int root_fat = (RootClus - 2) * SecPerClus + 2;
-        int root_dir = cluster_start + (root_fat-2)*BytsPerSec;;
+        int root_dir = cluster_start + (root_fat-2)*BytsPerSec;
         int match = 0;
         int i,j;
         do{
@@ -208,7 +217,6 @@ int main(int argc, char **argv){
                     match++;
                     int file_size;
                     int starting_cluster;
-                    int cluster_spread;
                     
                     file_size = entry->DIR_FileSize;
                     starting_cluster = entry->DIR_FstClusLO;
@@ -241,6 +249,70 @@ int main(int argc, char **argv){
         fclose(fp);
         printf("%s: successfully recovered\n", recover_file);
         return 0;
+    }
+    if(r && s){
+        char* new_file = (char*)malloc(length_file);
+        memcpy(new_file, addr, length_file);
+        DirEntry *entry = (DirEntry*)malloc(sizeof(DirEntry));
+        int offset_a;
+        char* file_name = (char*)malloc(13*sizeof(char));
+        int root_fat = (RootClus - 2) * SecPerClus + 2;
+        int root_dir = cluster_start + (root_fat-2)*BytsPerSec;
+        int i,j;
+        do{
+            for(offset_a=0;offset_a<BytsPerSec;offset_a+=sizeof(DirEntry)){
+                memcpy(entry, addr+root_dir+offset_a, sizeof(DirEntry));
+                process_name(entry->DIR_Name, file_name);
+
+                
+                if(entry->DIR_Name[0]==0xe5 && strcmp(recover_file+1, file_name+1)==0){
+                    int file_size;
+                    int starting_cluster;
+                    
+                    file_size = entry->DIR_FileSize;
+                    starting_cluster = entry->DIR_FstClusLO;
+                    starting_cluster += (entry->DIR_FstClusHI)*0x10000;
+
+                    // https://memset.wordpress.com/2010/10/06/using-sha1-function/
+                    unsigned char sha[20];
+                    char buf[40];
+                    memset(buf, 0x0, 40);
+                    memset(sha, 0x0, 20);
+                    SHA1(addr+cluster_start+((starting_cluster - 2)*SecPerClus)*BytsPerSec, file_size, sha);
+                    for (i=0; i < 20; i++) {
+                        sprintf((char*)&(buf[i*2]), "%02x", sha[i]);
+                    }
+                
+                    // printf("SHA1 is %s\n", buf);
+                    if(memcmp(buf, sha_target, 40)==0){
+                        i=starting_cluster;
+                        j=starting_cluster+1;
+                        for(;file_size>0;file_size-=(BytsPerSec*SecPerClus)){
+                            if(file_size<=(BytsPerSec*SecPerClus))j=0x0fffffff;
+                            memcpy(new_file + fat_start + i * 4, &j, 4); // change first FAT
+                            i++;j++;    
+                        }
+                        memcpy(new_file+root_dir+offset_a, recover_file, 1);  // change e5
+
+                        //copy FAT
+                        for(i=1;i<NumFATs;i++){
+                            memcpy(new_file + fat_start + i*FATSz32*BytsPerSec, new_file + fat_start, FATSz32*BytsPerSec);
+                        }
+                        //write new_file back
+                        FILE *fp;
+                        fp = fopen(disk_name , "wb");
+                        fwrite(new_file, length_file , 1, fp);
+                        fclose(fp);
+                        printf("%s: successfully recovered\n", recover_file);
+                        return 0;
+                    }
+                }
+                else continue;
+            }
+            memcpy(&root_fat, addr + fat_start + root_fat * 4, 4);
+        }while(root_fat < 0x0ffffff8);
+        fprintf(stderr, "%s: file not found\n", recover_file);
+        exit(EXIT_FAILURE);
     }
 
 
