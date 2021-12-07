@@ -69,22 +69,23 @@ typedef struct link{
 Link* head = NULL;
 
 void get_permutation(int* fa, int* fb, int current, int num_left){
+    int i,j;
     if(num_left==0){
         Link* temp= (Link*)malloc(sizeof(Link));
-        for(int i=0;i<current;i++)temp->index[i] = fa[i];
+        for(i=0;i<current;i++)temp->index[i] = fa[i];
         temp->next = head;
         head=temp;
     }
     else{
         int aa[MAX_CLUSTER_FOR_BF] = {0};
         int bb[MAX_CLUSTER_FOR_BF] = {0};
-        for(int i=0;i<current;i++)
+        for(i=0;i<current;i++)
             aa[i] = fa[i];
-        for(int i=0;i<MAX_CLUSTER_FOR_BF;i++){
+        for(i=0;i<MAX_CLUSTER_FOR_BF;i++){
             if(fb[i]==0)continue;
             else{
                 aa[current] = fb[i];
-                for(int j=0;j<MAX_CLUSTER_FOR_BF;j++)
+                for(j=0;j<MAX_CLUSTER_FOR_BF;j++)
                     bb[j] = fb[j]==fb[i]?0:fb[j];
                 get_permutation(aa, bb, current+1, num_left-1);
             }
@@ -93,17 +94,18 @@ void get_permutation(int* fa, int* fb, int current, int num_left){
 }
 
 void process_name(char* raw, char* new){
+    int i;
     memset(new, 0x0, 13);
     char* p = new;
     if(raw[0]==0) return;
     // if(raw[0]==0xe5)return;
-    for(int i=0;i<8;i++){
+    for(i=0;i<8;i++){
         if(raw[i]==0x20)break;
         else *p++ = raw[i];
     }
     if(new[0]==0) return;
     *p = 0x2e;
-    for(int i=8;i<11;i++){
+    for(i=8;i<11;i++){
         if(raw[i]==0x20)break;
         else *++p = raw[i];
     }
@@ -202,9 +204,10 @@ int main(int argc, char **argv){
         int offset_a;
         char* file_name = (char*)malloc(13*sizeof(char));
         int root_fat = (RootClus - 2) * SecPerClus + 2;
-        int root_dir = cluster_start + (root_fat-2)*BytsPerSec;
+        int root_dir;
         int starting_cluster;
         do{
+            root_dir = cluster_start + (root_fat-2)*BytsPerSec;
             for(offset_a=0;offset_a<BytsPerSec*SecPerClus;offset_a+=sizeof(DirEntry)){
                 memcpy(entry, addr+root_dir+offset_a, sizeof(DirEntry));
                 process_name(entry->DIR_Name, file_name);
@@ -232,10 +235,11 @@ int main(int argc, char **argv){
         int offset_a;
         char* file_name = (char*)malloc(13*sizeof(char));
         int root_fat = (RootClus - 2) * SecPerClus + 2;
-        int root_dir = cluster_start + (root_fat-2)*BytsPerSec;
+        int root_dir;
         int match = 0;
         int i,j;
         do{
+            root_dir = cluster_start + (root_fat-2)*BytsPerSec;
             for(offset_a=0;offset_a<BytsPerSec*SecPerClus;offset_a+=sizeof(DirEntry)){
                 memcpy(entry, addr+root_dir+offset_a, sizeof(DirEntry));
                 process_name(entry->DIR_Name, file_name);
@@ -287,13 +291,14 @@ int main(int argc, char **argv){
         int offset_a;
         char* file_name = (char*)malloc(13*sizeof(char));
         int root_fat = (RootClus - 2) * SecPerClus + 2;
-        int root_dir = cluster_start + (root_fat-2)*BytsPerSec;
+        int root_dir;
         int i,j;
         int file_size;
         int starting_cluster;
         unsigned char sha[SHA_DIGEST_LENGTH];
         char buf[SHA_DIGEST_LENGTH*2];
         do{
+            root_dir = cluster_start + (root_fat-2)*BytsPerSec;
             for(offset_a=0;offset_a<BytsPerSec*SecPerClus;offset_a+=sizeof(DirEntry)){
                 memcpy(entry, addr+root_dir+offset_a, sizeof(DirEntry));
                 process_name(entry->DIR_Name, file_name);
@@ -335,7 +340,7 @@ int main(int argc, char **argv){
                         fp = fopen(disk_name , "wb");
                         fwrite(new_disk, length_file , 1, fp);
                         fclose(fp);
-                        printf("%s: successfully recovered\n", recover_file_name);
+                        printf("%s: successfully recovered with SHA-1\n", recover_file_name);
                         return 0;
                     }
                 }
@@ -354,7 +359,7 @@ int main(int argc, char **argv){
         int offset_a;
         char* file_name = (char*)malloc(13*sizeof(char));
         int root_fat = (RootClus - 2) * SecPerClus + 2;
-        int root_dir = cluster_start + (root_fat-2)*BytsPerSec;
+        int root_dir;
         int match = 0;
         int i,j;
 
@@ -374,6 +379,7 @@ int main(int argc, char **argv){
         int bb[MAX_CLUSTER_FOR_BF] = {0};
 
         do{
+            root_dir = cluster_start + (root_fat-2)*BytsPerSec;
             for(offset_a=0;offset_a<BytsPerSec*SecPerClus;offset_a+=sizeof(DirEntry)){
                 memcpy(entry, addr+root_dir+offset_a, sizeof(DirEntry));
                 process_name(entry->DIR_Name, file_name);
@@ -436,7 +442,7 @@ int main(int argc, char **argv){
                             fp = fopen(disk_name, "wb");
                             fwrite(new_disk, length_file , 1, fp);
                             fclose(fp);
-                            printf("%s: successfully recovered\n", recover_file_name);
+                            printf("%s: successfully recovered with SHA-1\n", recover_file_name);
                             return 0;
                         }
                         p=p->next;
